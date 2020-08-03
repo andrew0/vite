@@ -235,19 +235,10 @@ export const vuePlugin: ServerPlugin = ({
     }
 
     let didUpdateStyle = false
+    let didUpdateCssModule = false
     const styleId = hash_sum(publicPath)
     const prevStyles = prevDescriptor.styles || []
     const nextStyles = descriptor.styles || []
-
-    // css modules update causes a reload because the $style object is changed
-    // and it may be used in JS. It also needs to trigger a vue-style-update
-    // event so the client busts the sw cache.
-    if (
-      prevStyles.some((s) => s.module != null) ||
-      nextStyles.some((s) => s.module != null)
-    ) {
-      return sendReload()
-    }
 
     // force reload if CSS vars injection changed
     if (
@@ -270,26 +261,44 @@ export const vuePlugin: ServerPlugin = ({
     // style updates as well.
     nextStyles.forEach((_, i) => {
       if (!prevStyles[i] || !isEqualBlock(prevStyles[i], nextStyles[i])) {
-        didUpdateStyle = true
-        const path = `${publicPath}?type=style&index=${i}`
-        send({
-          type: 'style-update',
-          path,
-          changeSrcPath: path,
-          timestamp
-        })
+        if (
+          (prevStyles[i] && prevStyles[i].module != null) ||
+          nextStyles[i].module != null
+        ) {
+          didUpdateCssModule = true
+        } else {
+          didUpdateStyle = true
+          const path = `${publicPath}?type=style&index=${i}`
+          send({
+            type: 'style-update',
+            path,
+            changeSrcPath: path,
+            timestamp
+          })
+        }
       }
     })
 
     // stale styles always need to be removed
-    prevStyles.slice(nextStyles.length).forEach((_, i) => {
-      didUpdateStyle = true
-      send({
-        type: 'style-remove',
-        path: publicPath,
-        id: `${styleId}-${i + nextStyles.length}`
-      })
+    prevStyles.slice(nextStyles.length).forEach((s, i) => {
+      if (s.module != null) {
+        didUpdateCssModule = true
+      } else {
+        didUpdateStyle = true
+        send({
+          type: 'style-remove',
+          path: publicPath,
+          id: `${styleId}-${i + nextStyles.length}`
+        })
+      }
     })
+
+    // css modules update causes a reload because the $style object is changed
+    // and it may be used in JS. It also needs to trigger a vue-style-update
+    // event so the client busts the sw cache.
+    if (didUpdateCssModule) {
+      return sendReload()
+    }
 
     const prevCustoms = prevDescriptor.customBlocks || []
     const nextCustoms = descriptor.customBlocks || []
